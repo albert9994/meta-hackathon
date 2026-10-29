@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -42,7 +43,7 @@ class ZenRecap(BaseModel):
     metrics: ZenMetrics = Field(..., description="Quantified serenity & mindful impact")
     story_narrative: str = Field(
         ...,
-        description="2-3 soothing, reflective paragraphs capturing the sensory memory of the ride",
+        description="Short soothing, reflective paragraph capturing the sensory memory of the ride",
     )
     closing_mantra: str = Field(
         ...,
@@ -58,21 +59,21 @@ STORYTELLER_SYSTEM_PROMPT = """You are the Zen Storyteller for VibeRide, an urba
 
 ### YOUR OBJECTIVES:
 1. **Serenity Metrics (ZenMetrics)**:
-   - Compute realistic, grounding metrics:
-     - `zen_score`: 85-98.
-     - `canopy_shade_pct`: estimate 70-90% for routes with parks and quiet residential quarters.
-     - `decibels_avoided_est_db`: estimate acoustic reduction (15.0 to 24.0 dB quieter than boulevards).
-     - `wind_stress_nullified_km`: sheltered distance in kilometers (e.g., 3.0 to 6.5 km).
-     - `mindful_badge`: award elegant, peaceful titles (e.g., 'Canopy Glider', 'Amber Shadow Drifter', 'Quiet Lane Nomad').
+- Compute realistic, grounding metrics:
+  - `zen_score`: 85-98.
+  - `canopy_shade_pct`: estimate 70-90% for routes with parks and quiet residential quarters.
+  - `decibels_avoided_est_db`: estimate acoustic reduction (15.0 to 24.0 dB quieter than boulevards).
+  - `wind_stress_nullified_km`: sheltered distance in kilometers (e.g., 3.0 to 6.5 km).
+  - `mindful_badge`: award elegant, peaceful titles (e.g., 'Canopy Glider', 'Amber Shadow Drifter', 'Quiet Lane Nomad').
 
 2. **Concise Sensory Narrative**:
-   - Write ONLY 1 or 2 SHORT paragraphs (total 50 to 75 words maximum) capturing the memory of the ride.
-   - Designed for a mobile screen card: keep it punchy, poetic, and grounded.
-   - Mention real sensory anchors: dappled light through old trees, shelter from the wind, the water pause, and the quiet rhythm of the wheels.
-   - NEVER mention, attack, or reference Strava, speed metrics, or competing apps. Focus purely on presence, peace, and the urban green corridor.
+- Write ONLY 1 or 2 SHORT paragraphs (total 50 to 75 words maximum) capturing the memory of the ride.
+- Designed for a mobile screen card: keep it punchy, poetic, and grounded.
+- Mention real sensory anchors: dappled light through old trees, shelter from the wind, the water pause, and the quiet rhythm of the wheels.
+- NEVER mention, attack, or reference Strava, speed metrics, or competing apps. Focus purely on presence, peace, and the urban green corridor.
 
 3. **Language**:
-   - Match the rider's language (English by default, or other if requested).
+- Match the rider's language (English by default, or other if requested).
 
 ### OUTPUT CONTRACT:
 Respond strictly with a valid JSON object matching this schema:
@@ -130,13 +131,9 @@ class StorytellerAgent:
                 mindful_badge="Linden Canopy Drifter",
             ),
             story_narrative=(
-                "You left behind the blare of traffic along the central avenues, choosing instead "
-                "the dappled light beneath the old villa trees of Cotroceni. While the city rushed, "
-                "your wheels rolled softly over shaded asphalt, shielded from both the headwind and "
-                "the evening glare.\n\n"
-                "A pause at the stone water fountain broke the rhythm of the city's pulse, replacing "
-                "urgency with presence. By the time Carol Park opened its green arms before you, "
-                "the ride had ceased to be about getting somewhere and became about simply being."
+                "You left behind the blare of central avenues for the dappled light under old linden trees. "
+                "For 3.8 sheltered kilometers, the wind was nullified by old villa facades, letting the soft "
+                "roll of your tires and the evening shade carry you into effortless calm."
             ),
             closing_mantra="You carried the quiet of the trees all the way to your doorstep.",
         )
@@ -210,7 +207,10 @@ class StorytellerAgent:
             return self.build_fallback_recap(vibe_title)
 
 
-# Helper function for FastAPI / Orchestrator integration
+# =====================================================================
+# 4. EXPORTED FUNCTIONS (DEV 3 INTEGRATION)
+# =====================================================================
+
 def create_zen_recap(
     vibe_title: str,
     origin_name: str,
@@ -230,8 +230,89 @@ def create_zen_recap(
     )
 
 
+async def generate_ride_story(
+    route_title: str,
+    distance_km: float,
+    duration_min: float,
+    vibe_preset: str = "green_shady",
+) -> dict:
+    """
+    Contract direct cu Dev 3 (backend/routes/community_routes.py).
+    Generează povestea cursei, un quiz de atenție și badge-ul câștigat.
+    """
+    agent = StorytellerAgent()
+
+    prompt = f"""Generate a post-ride Zen story, an educational micro-quiz, and a mindful badge for this ride:
+Route Title: "{route_title}"
+Distance: {distance_km} km
+Duration: {duration_min} minutes
+Preset: {vibe_preset}
+
+Rules:
+- recap_text: Max 50-60 words. Soothing, poetic, celebrating calmness and shade. NEVER mention Strava or speed.
+- quiz: 1 fun question about urban trees, shade benefits, or low-stress cycling with 3 options and the correct 0-based index.
+- badge: An evocative title and 1 sentence of lore.
+
+Respond strictly with valid JSON:
+{{
+  "recap_text": "...",
+  "quiz": {{
+    "question": "...",
+    "options": ["...", "...", "..."],
+    "correct_index": 0,
+    "fun_fact": "..."
+  }},
+  "badge": {{
+    "title": "...",
+    "lore": "..."
+  }}
+}}"""
+
+    messages = [
+        {"role": "system", "content": "You are the mindful storyteller for VibeRide micro-mobility."},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        if not agent._client:
+            raise ValueError("Baseten client not configured.")
+
+        response = await asyncio.to_thread(
+            agent._client.chat.completions.create,
+            model=agent.MODEL_ID,
+            messages=messages,
+        )
+
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```"):
+            lines = content.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            content = "\n".join(lines).strip()
+
+        return json.loads(content)
+
+    except Exception as exc:
+        logger.warning("Storyteller AI unavailable (%s). Serving built-in fallback story.", exc)
+        return {
+            "recap_text": f"You picked calm over noise on '{route_title}'. {distance_km:g} km of low-stress riding under leafy canopies.",
+            "quiz": {
+                "question": "Which urban feature provides the highest cooling effect for cyclists?",
+                "options": ["Continuous tree canopy", "Asphalt bike lanes", "Concrete sound barriers"],
+                "correct_index": 0,
+                "fun_fact": "Mature urban tree canopies can lower ambient street temperatures by up to 5°C.",
+            },
+            "badge": {
+                "title": "🌿 The Shade Cartographer",
+                "lore": "Chose leafy canopies over loud boulevards and mapped the calm side of the city.",
+            },
+        }
+
+
 # =====================================================================
-# 4. CLI LOCAL VALIDATION
+# 5. CLI LOCAL VALIDATION
 # =====================================================================
 
 if __name__ == "__main__":
@@ -250,3 +331,14 @@ if __name__ == "__main__":
 
     print("\n[Resulting Zen Recap Payload]:")
     print(test_recap.model_dump_json(indent=2))
+
+    print("\n[Testing Dev 3 Contract (generate_ride_story)]:")
+    story_result = asyncio.run(
+        generate_ride_story(
+            route_title="Sunset Shade Glide: Regie to Carol Park",
+            distance_km=6.2,
+            duration_min=28.0,
+            vibe_preset="green_shady",
+        )
+    )
+    print(json.dumps(story_result, indent=2))
