@@ -1,0 +1,275 @@
+import React, { useRef, useEffect, useMemo } from 'react';
+import { StyleSheet, View, Text, Platform } from 'react-native';
+import MapView, { Marker, Polyline, Callout } from 'react-native-maps';
+
+/**
+ * VibeRide - Interactive Navigation Map Component
+ *
+ * Implements:
+ * 1. GeoJSON [lon, lat] -> Native Maps { latitude, longitude } coordinate mapping.
+ * 2. Glow Aesthetic: Overlapping polylines (10px @ 0.35 opacity + 4px @ 1.0 opacity).
+ * 3. Dynamic markers for origin, destination, vibe stops (coffee, park, view), and hazards.
+ * 4. Automatic bounding box refit on route change.
+ */
+export default function VibeMapView({
+  plan,
+  geojson,
+  hazards = [],
+  userLocation = null,
+  style,
+}) {
+  const mapRef = useRef(null);
+
+  // 1. Transform GeoJSON [lon, lat] coordinates into { latitude, longitude }
+  const routeCoordinates = useMemo(() => {
+    if (!geojson || !geojson.features || geojson.features.length === 0) {
+      return [];
+    }
+    const feature = geojson.features[0];
+    if (!feature.geometry || !Array.isArray(feature.geometry.coordinates)) {
+      return [];
+    }
+
+    return feature.geometry.coordinates.map((coord) => ({
+      latitude: coord[1],
+      longitude: coord[0],
+    }));
+  }, [geojson]);
+
+  // 2. Automatically fit map bounds whenever a new route is loaded
+  useEffect(() => {
+    if (mapRef.current && routeCoordinates.length > 1) {
+      mapRef.current.fitToCoordinates(routeCoordinates, {
+        edgePadding: { top: 80, right: 50, bottom: 80, left: 50 },
+        animated: true,
+      });
+    }
+  }, [routeCoordinates]);
+
+  // Fallback initial center (Bucharest Center - University Square)
+  const initialRegion = {
+    latitude: 44.4355,
+    longitude: 26.1025,
+    latitudeDelta: 0.08,
+    longitudeDelta: 0.08,
+  };
+
+  const getStopEmoji = (type) => {
+    switch (type) {
+      case 'coffee':
+        return '☕';
+      case 'park':
+        return '🌿';
+      case 'view':
+        return '🏛️';
+      case 'gelato':
+        return '🍦';
+      default:
+        return '✨';
+    }
+  };
+
+  return (
+    <View style={[styles.container, style]}>
+      <MapView
+        ref={mapRef}
+        style={StyleSheet.absoluteFillObject}
+        initialRegion={initialRegion}
+        showsUserLocation={Boolean(userLocation)}
+        showsMyLocationButton={false}
+        showsCompass={false}
+      >
+        {/* ================================================================= */}
+        {/* GLOW AESTHETIC ROUTE POLYLINES                             */}
+        {/* ================================================================= */}
+        {routeCoordinates.length > 0 && (
+          <>
+            {/* Glow Layer: 10px #fc5200 at 0.35 opacity */}
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeColor="rgba(252, 82, 0, 0.35)"
+              strokeWidth={10}
+              lineCap="round"
+              lineJoin="round"
+              zIndex={1}
+            />
+
+            {/* Core Razor Line: 4px #fc5200 at 1.0 opacity */}
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeColor="#fc5200"
+              strokeWidth={4}
+              lineCap="round"
+              lineJoin="round"
+              zIndex={2}
+            />
+          </>
+        )}
+
+        {/* ================================================================= */}
+        {/* ROUTE MARKERS: Origin & Destination                               */}
+        {/* ================================================================= */}
+        {plan?.origin && (
+          <Marker
+            coordinate={{
+              latitude: plan.origin.lat,
+              longitude: plan.origin.lon,
+            }}
+            title={plan.origin.name}
+            description="Start of calm ride"
+            zIndex={3}
+          >
+            <View style={[styles.markerBadge, styles.originMarker]}>
+              <Text style={styles.markerText}>🚲</Text>
+            </View>
+          </Marker>
+        )}
+
+        {plan?.destination && (
+          <Marker
+            coordinate={{
+              latitude: plan.destination.lat,
+              longitude: plan.destination.lon,
+            }}
+            title={plan.destination.name}
+            description="Destination"
+            zIndex={3}
+          >
+            <View style={[styles.markerBadge, styles.destinationMarker]}>
+              <Text style={styles.markerText}>🏁</Text>
+            </View>
+          </Marker>
+        )}
+
+        {/* ================================================================= */}
+        {/* INTERMEDIATE VIBE STOPS (Coffee, Parks, Gelato)                   */}
+        {/* ================================================================= */}
+        {plan?.intermediate_stops?.map((stop, index) => (
+          <Marker
+            key={`stop-${index}-${stop.lat}-${stop.lon}`}
+            coordinate={{
+              latitude: stop.lat,
+              longitude: stop.lon,
+            }}
+            title={stop.name}
+            description={`Vibe Stop: ${stop.type || 'Scenic point'}`}
+            zIndex={4}
+          >
+            <View style={[styles.markerBadge, styles.vibeMarker]}>
+              <Text style={styles.markerText}>{getStopEmoji(stop.type)}</Text>
+            </View>
+            <Callout>
+              <View style={styles.calloutContainer}>
+                <Text style={styles.calloutTitle}>{stop.name}</Text>
+                <Text style={styles.calloutSubtitle}>
+                  Vibe Stop ({stop.type || 'Exploration'})
+                </Text>
+              </View>
+            </Callout>
+          </Marker>
+        ))}
+
+        {/* ================================================================= */}
+        {/* HAZARD WARNING MARKERS (From Spatial Safety Sensor)              */}
+        {/* ================================================================= */}
+        {hazards.map((hazard) => (
+          <Marker
+            key={`hazard-${hazard.id}`}
+            coordinate={{
+              latitude: hazard.lat,
+              longitude: hazard.lon,
+            }}
+            zIndex={5}
+          >
+            <View style={[styles.markerBadge, styles.hazardMarker]}>
+              <Text style={styles.markerText}>⚠️</Text>
+            </View>
+            <Callout>
+              <View style={styles.calloutContainer}>
+                <Text style={styles.calloutAlertTitle}>Hazard Detected</Text>
+                <Text style={styles.calloutSubtitle}>
+                  {hazard.hazard_type?.replace(/_/g, ' ') || 'Road caution'}
+                </Text>
+                {hazard.audio_alert && (
+                  <Text style={styles.calloutAlertText}>
+                    "{hazard.audio_alert}"
+                  </Text>
+                )}
+              </View>
+            </Callout>
+          </Marker>
+        ))}
+      </MapView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#121212',
+  },
+  markerBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.3,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 5,
+      },
+    }),
+  },
+  originMarker: {
+    backgroundColor: '#10b981', // Emerald green
+  },
+  destinationMarker: {
+    backgroundColor: '#3b82f6', // Bright blue
+  },
+  vibeMarker: {
+    backgroundColor: '#8b5cf6', // Violet
+  },
+  hazardMarker: {
+    backgroundColor: '#ef4444', // Red
+    borderColor: '#fef08a', // Yellow highlight
+  },
+  markerText: {
+    fontSize: 16,
+  },
+  calloutContainer: {
+    padding: 8,
+    minWidth: 140,
+    maxWidth: 220,
+  },
+  calloutTitle: {
+    fontWeight: 'bold',
+    fontSize: 14,
+    color: '#111827',
+  },
+  calloutSubtitle: {
+    fontSize: 12,
+    color: '#4b5563',
+    marginTop: 2,
+    textTransform: 'capitalize',
+  },
+  calloutAlertTitle: {
+    fontWeight: 'bold',
+    fontSize: 13,
+    color: '#b91c1c',
+  },
+  calloutAlertText: {
+    fontSize: 11,
+    fontStyle: 'italic',
+    color: '#374151',
+    marginTop: 4,
+  },
+});
