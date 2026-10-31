@@ -11,8 +11,7 @@ ORS_API_KEY = os.getenv("OPENROUTESERVICE_API_KEY", "")
 
 def format_as_geojson(coordinates: List[List[float]], distance_km: float, duration_min: float) -> Dict[str, Any]:
     """
-    Împachetează coordonatele și statisticile în formatul standard internațional GeoJSON.
-    Acesta este exact formatul cerut de colegul de pe Mobile (Dev 3).
+    Wraps coordinates and route statistics into the standard GeoJSON format.
     """
     return {
         "type": "FeatureCollection",
@@ -21,7 +20,7 @@ def format_as_geojson(coordinates: List[List[float]], distance_km: float, durati
                 "type": "Feature",
                 "geometry": {
                     "type": "LineString",
-                    "coordinates": coordinates  # Listă de puncte [lon, lat]
+                    "coordinates": coordinates  # Points list [lon, lat]
                 },
                 "properties": {
                     "distance_km": distance_km,
@@ -33,20 +32,20 @@ def format_as_geojson(coordinates: List[List[float]], distance_km: float, durati
 
 async def calculate_bike_route(coordinates: List[Tuple[float, float]]) -> Dict[str, Any]:
     """
-    Calculează traseul pentru bicicletă între punctele date.
+    Calculates the cycling route across the provided waypoints.
     
-    PARAMETRU:
-    coordinates: Listă de puncte în format STRICT [lon, lat]
-                 Exemplu: [[26.0558, 44.4447], [26.0963, 44.4150]]
-                 
-    RETURNEAZĂ:
-    Un GeoJSON FeatureCollection conform contractului din Secțiunea 4.
+    Args:
+        coordinates: A list of points strictly in [lon, lat] format (GeoJSON standard).
+                     Example: [[26.0558, 44.4447], [26.0963, 44.4150]]
+                     
+    Returns:
+        A GeoJSON FeatureCollection containing the route geometry and summary metrics.
     """
     if len(coordinates) < 2:
-        raise ValueError("Ai nevoie de cel puțin 2 puncte (Start și Sosire) pentru un traseu.")
+        raise ValueError("At least 2 points (origin and destination) are required to calculate a route.")
 
     # ------------------------------------------------------------------------
-    # Opțiunea 1: OpenRouteService (dacă există cheie API)
+    # Option 1: OpenRouteService (if there is an API key)
     # ------------------------------------------------------------------------
     if ORS_API_KEY:
         try:
@@ -72,10 +71,10 @@ async def calculate_bike_route(coordinates: List[Tuple[float, float]]) -> Dict[s
                     coords = feature["geometry"]["coordinates"]
                     return format_as_geojson(coords, dist_km, dur_min)
         except Exception as e:
-            print(f"[Avertisment] OpenRouteService indisponibil ({e}). Comutăm pe fallback OSM...")
+            print(f"[Warning] OpenRouteService unavailable ({e}). Falling back to OSM...")
 
     # ------------------------------------------------------------------------
-    # Opțiunea 2: Fallback OpenStreetMap (Gratuit, public, fără cheie API)
+    # Option 2: Fallback OpenStreetMap (Free, public, without an API key)
     # ------------------------------------------------------------------------
     coord_string = ";".join([f"{lon},{lat}" for lon, lat in coordinates])
     osm_url = f"https://routing.openstreetmap.de/routed-bike/route/v1/driving/{coord_string}?overview=full&geometries=geojson"
@@ -83,11 +82,11 @@ async def calculate_bike_route(coordinates: List[Tuple[float, float]]) -> Dict[s
     async with httpx.AsyncClient(timeout=12.0) as client:
         res = await client.get(osm_url)
         if res.status_code != 200:
-            raise RuntimeError(f"Eroare la calcularea rutei de pe OSM: cod status {res.status_code}")
+            raise RuntimeError(f"Error calculating route from OSM: status code {res.status_code}")
         
         data = res.json()
         if "routes" not in data or len(data["routes"]) == 0:
-            raise RuntimeError("Nu s-a putut găsi nicio rută validă între aceste puncte.")
+            raise RuntimeError("No valid route could be found between these points.")
             
         route = data["routes"][0]
         dist_km = round(route["distance"] / 1000.0, 2)
@@ -98,27 +97,27 @@ async def calculate_bike_route(coordinates: List[Tuple[float, float]]) -> Dict[s
 
 
 # ============================================================================
-# BLOC DE TEST RAPID
+# QUICK TEST
 # ============================================================================
 if __name__ == "__main__":
     import asyncio
 
     async def test_run():
-        print("🚴‍♂️ Verificăm generarea de GeoJSON valid...\n")
-        puncte_test = [
+        print("🚴‍♂️ Verifying valid GeoJSON generation...\n")
+        test_points = [
             [26.0558, 44.4447],  # UPB Regie
             [26.0976, 44.4342],  # Origo Coffee
-            [26.0963, 44.4150]   # Parcul Carol
+            [26.0963, 44.4150]   # Carol Park
         ]
 
-        geojson_result = await calculate_bike_route(puncte_test)
+        geojson_result = await calculate_bike_route(test_points)
         
         props = geojson_result["features"][0]["properties"]
         geom = geojson_result["features"][0]["geometry"]
         
-        print("✅ Structură GeoJSON creată cu succes!")
-        print(f"📦 Tip GeoJSON: {geojson_result['type']}")
-        print(f"📏 Distanță: {props['distance_km']} km | ⏱️ Timp: {props['duration_min']} min")
-        print(f"📍 Puncte [lon, lat] în linie: {len(geom['coordinates'])} puncte")
+        print("✅ GeoJSON structure created successfully!")
+        print(f"📦 GeoJSON Type: {geojson_result['type']}")
+        print(f"📏 Distance: {props['distance_km']} km | ⏱️ Time: {props['duration_min']} min")
+        print(f"📍 Points [lon, lat] in line: {len(geom['coordinates'])} points")
 
     asyncio.run(test_run())
