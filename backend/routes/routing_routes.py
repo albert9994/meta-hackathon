@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from backend.agents.vibe_planner import VibePlannerAgent
@@ -19,8 +20,10 @@ router = APIRouter(prefix="/api/route", tags=["routing"])
 class RouteRequest(BaseModel):
     user_prompt: str = Field(
         ...,
+        min_length=1,
         description="Ride request, e.g. 'Chill sunset ride from UPB Regie to Carol Park'",
     )
+    vibe_preset: Optional[str] = Field(default=None)
     city: str = Field(default="Bucharest")
     time_of_day: str = Field(default="sunset")
     wind_direction_deg: Optional[int] = Field(default=270)
@@ -33,40 +36,45 @@ async def plan_and_calculate_route(req: RouteRequest) -> Dict[str, Any]:
     2. Calculeaza geometria GeoJSON detaliata prin motorul GIS (routing).
     3. Returneaza pachetul complet pentru aplicatia mobila (harta + audio + cues).
     """
+    prompt = (
+        f"[Vibe: {req.vibe_preset}] {req.user_prompt}" if req.vibe_preset else req.user_prompt
+    )
+
+    # generate_plan e sincron (client OpenAI) -> il rulam in threadpool ca sa nu blocam event loop-ul.
+    vibe_plan = await run_in_threadpool(
+        VibePlannerAgent().generate_plan,
+        user_prompt=prompt,
+        city=req.city,
+        wind_direction_deg=req.wind_direction_deg,
+        time_of_day=req.time_of_day,
+    )
+
     try:
-        # 1. Planificare cu AI
-        planner = VibePlannerAgent()
-        vibe_plan = planner.generate_plan(
-            user_prompt=req.user_prompt,
-            city=req.city,
-            wind_direction_deg=req.wind_direction_deg,
-            time_of_day=req.time_of_day,
-        )
-
-        # 2. Extragere coordonate [lon, lat] pentru GIS
-        waypoints_coords = vibe_plan.to_geojson_coordinates()
-
-        # 3. Calculare geometrie bicicletă cu motorul GIS
-        geojson = await calculate_bike_route(waypoints_coords)
-
-        # 4. Injectam metadatele Zen direct in proprietatile rutei
-        props = geojson["features"][0]["properties"]
-        props["vibe_title"] = vibe_plan.vibe_title
-        props["audio_intro"] = vibe_plan.audio_intro
-        props["avoid_tags"] = vibe_plan.avoid_tags
-        props["chill_cues"] = [cue.model_dump() for cue in vibe_plan.chill_cues]
-        props["origin_name"] = vibe_plan.origin.name
-        props["destination_name"] = vibe_plan.destination.name
-
-        # Returnam atat formatul GeoJSON standard, cat si obiectul de vibe_plan separat
-        return {
-            "geojson": geojson,
-            "vibe_plan": vibe_plan.model_dump(),
-        }
-
+        geojson = await calculate_bike_route(vibe_plan.to_geojson_coordinates())
     except Exception as exc:
-        logger.error("Error in /api/route/plan: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("Routing failed for AI plan (%s). Retrying with fallback plan.", exc)
+        vibe_plan = VibePlannerAgent.build_fallback_plan(user_prompt=req.user_prompt, city=req.city)
+        try:
+            geojson = await calculate_bike_route(vibe_plan.to_geojson_coordinates())
+        except Exception as exc2:
+            logger.error("Fallback routing failed: %s", exc2)
+            raise HTTPException(status_code=502, detail=f"Routing unavailable: {exc2}")
+
+    coords = geojson["features"][0]["geometry"]["coordinates"]
+    if len(coords) < 2:
+        raise HTTPException(status_code=502, detail="Routing returned an empty geometry.")
+
+    # Injectam metadatele Zen direct in proprietatile rutei
+    props = geojson["features"][0]["properties"]
+    props["vibe_title"] = vibe_plan.vibe_title
+    props["audio_intro"] = vibe_plan.audio_intro
+    props["avoid_tags"] = vibe_plan.avoid_tags
+    props["chill_cues"] = [cue.model_dump() for cue in vibe_plan.chill_cues]
+    props["origin_name"] = vibe_plan.origin.name
+    props["destination_name"] = vibe_plan.destination.name
+
+    # GeoJSON standard ([lon, lat]) + planul separat (lat/lon) pentru markeri
+    return {"geojson": geojson, "vibe_plan": vibe_plan.model_dump()}
 
 
 # ============================================================================
@@ -77,7 +85,9 @@ class CopilotVoiceRequest(BaseModel):
     user_utterance: str = Field(
         ...,
         description="Transcript of what the rider said hands-free",
-        example="There's intense headwind and heavy traffic here, find me a quiet alley.",
+        json_schema_extra={
+            "example": "There's intense headwind and heavy traffic here, find me a quiet alley."
+        },
     )
     current_street: Optional[str] = Field(
         default="moving on route",
@@ -93,11 +103,11 @@ async def copilot_voice_endpoint(req: CopilotVoiceRequest) -> VoiceCopilotRespon
     """
     try:
         agent = VoiceCopilotAgent()
-        result = agent.process_voice_input(
+        return await run_in_threadpool(
+            agent.process_voice_input,
             user_utterance=req.user_utterance,
             current_street=req.current_street,
         )
-        return result
     except Exception as exc:
         logger.error("Error in /api/route/copilot: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))    
+        raise HTTPException(status_code=500, detail=str(exc))

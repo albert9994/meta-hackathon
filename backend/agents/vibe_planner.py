@@ -1,6 +1,8 @@
 import json
 import logging
+import math
 import os
+import re
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -14,6 +16,38 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("vibe_planner")
+
+# Centre (lat, lon) used to reject hallucinated / swapped coordinates.
+CITY_CENTERS = {"bucharest": (44.4268, 26.1025)}
+
+
+# =====================================================================
+# 0. ROBUST PARSING + GEO HELPERS
+# =====================================================================
+
+def extract_json(text: str) -> dict:
+    """Extract one JSON object from raw LLM output (handles <think>, ```json, prose, trailing commas)."""
+    text = re.sub(r"<think>.*?</think>", "", (text or ""), flags=re.S).strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
+    if m:
+        text = m.group(1).strip()
+    s, e = text.find("{"), text.rfind("}")
+    if s == -1 or e <= s:
+        raise ValueError("No JSON object in model output")
+    blob = text[s : e + 1]
+    try:
+        return json.loads(blob)
+    except json.JSONDecodeError:
+        return json.loads(re.sub(r",\s*([}\]])", r"\1", blob))  # trailing commas
+
+
+def _km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p = math.pi / 180
+    h = (
+        math.sin((lat2 - lat1) * p / 2) ** 2
+        + math.cos(lat1 * p) * math.cos(lat2 * p) * math.sin((lon2 - lon1) * p / 2) ** 2
+    )
+    return 12742 * math.asin(math.sqrt(min(1.0, h)))
 
 
 # =====================================================================
@@ -72,6 +106,31 @@ class VibePlan(BaseModel):
         coords.append([self.destination.lon, self.destination.lat])
         return coords
 
+    def sanitize(self, center: Optional[tuple] = None, max_km: float = 20.0) -> "VibePlan":
+        """
+        - Repara lat/lon inversate (ex: lat=26, lon=44 trece de validarea ge/le).
+        - Elimina stop-urile / cue-urile halucinate aflate prea departe.
+        - Daca origin/destination sunt in afara orasului cerut -> ValueError (se activeaza fallback).
+        """
+
+        def fix(w, ref) -> bool:
+            """Swap lat/lon daca asta il aduce langa ref; True daca e in raza."""
+            if (
+                _km(w.lat, w.lon, *ref) > max_km
+                and -90 <= w.lon <= 90
+                and _km(w.lon, w.lat, *ref) <= max_km
+            ):
+                w.lat, w.lon = w.lon, w.lat
+            return _km(w.lat, w.lon, *ref) <= max_km
+
+        if center and not (fix(self.origin, center) and fix(self.destination, center)):
+            raise ValueError("Origin/destination outside the requested city")
+
+        ref = (self.origin.lat, self.origin.lon)
+        self.intermediate_stops = [w for w in self.intermediate_stops if fix(w, ref)][:4]
+        self.chill_cues = [c for c in self.chill_cues if fix(c, ref)]
+        return self
+
 
 # =====================================================================
 # 2. SYSTEM PROMPT & ANCHORS
@@ -108,6 +167,12 @@ When routing in Bucharest, use accurate coordinates anchored around these verifi
 - Origo Coffee Shop: lat 44.4342, lon 26.0976
 
 If another global city is requested (e.g., Amsterdam, Paris, Austin, Tokyo), resolve valid GPS coordinates for calm parks and cafes in that specific city.
+
+### COORDINATE RULES (CRITICAL):
+- "lat" is latitude, "lon" is longitude, decimal degrees. NEVER swap them. Bucharest is lat ~44.4, lon ~26.1.
+- Maximum 4 intermediate_stops, all within 8 km of the origin, each on or beside a real street, park path or bike lane.
+- If unsure of exact coordinates, use a known landmark (park entrance, square, bridge) near the origin.
+- The first character of your reply must be "{" and the last "}".
 
 ### OUTPUT CONTRACT:
 Respond ONLY with a valid JSON object matching this schema (no markdown formatting, no explanatory prose):
@@ -147,6 +212,8 @@ class VibePlannerAgent:
             self._client = OpenAI(
                 base_url="https://inference.baseten.co/v1",
                 api_key=self.api_key,
+                timeout=25.0,  # fallback-ul se declanseaza inainte de abort-ul clientului mobil
+                max_retries=0,
             )
         else:
             logger.warning(
@@ -289,23 +356,16 @@ class VibePlannerAgent:
             response = self._client.chat.completions.create(
                 model=self.MODEL_ID,
                 messages=messages,
+                temperature=0.2,
+                max_tokens=1500,
             )
 
             raw_content = response.choices[0].message.content
             if not raw_content:
                 raise ValueError("Model returned an empty payload.")
 
-            cleaned = raw_content.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                cleaned = "\n".join(lines).strip()
-
-            parsed_json = json.loads(cleaned)
-            vibe_plan = VibePlan.model_validate(parsed_json)
+            vibe_plan = VibePlan.model_validate(extract_json(raw_content))
+            vibe_plan = vibe_plan.sanitize(center=CITY_CENTERS.get((city or "").strip().lower()))
             logger.info("Successfully validated VibePlan: '%s'", vibe_plan.vibe_title)
             return vibe_plan
 
