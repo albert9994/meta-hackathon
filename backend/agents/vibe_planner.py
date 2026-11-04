@@ -61,6 +61,17 @@ class VibePlan(BaseModel):
         description="Geolocated mindful audio cues along the route",
     )
 
+    def to_geojson_coordinates(self) -> list[list[float]]:
+        """
+        Extrage punctele traseului in format [lon, lat]
+        pentru motorul de routing (calculate_bike_route).
+        """
+        coords = [[self.origin.lon, self.origin.lat]]
+        for stop in self.intermediate_stops:
+            coords.append([stop.lon, stop.lat])
+        coords.append([self.destination.lon, self.destination.lat])
+        return coords
+
 
 # =====================================================================
 # 2. SYSTEM PROMPT & ANCHORS
@@ -133,7 +144,6 @@ class VibePlannerAgent:
 
         self._client: Optional[OpenAI] = None
         if self.api_key:
-            # Client identic cu cel functional din backend/main.py
             self._client = OpenAI(
                 base_url="https://inference.baseten.co/v1",
                 api_key=self.api_key,
@@ -276,7 +286,6 @@ class VibePlannerAgent:
 
         try:
             logger.info("Requesting plan from %s: '%s'", self.MODEL_ID, user_prompt)
-            # Apel direct, identic cu main.py
             response = self._client.chat.completions.create(
                 model=self.MODEL_ID,
                 messages=messages,
@@ -331,11 +340,10 @@ def plan_vibe_ride(
 # =====================================================================
 
 if __name__ == "__main__":
-    print("=== VibeRide AI Planner - Test Execution (Branch: feature/ai-agents) ===")
+    print("=== VibeRide AI Planner - Test Execution ===")
 
     agent = VibePlannerAgent()
 
-    # Test 1: Point A -> Point B ride at sunset with wind & glare shield
     prompt_ab = (
         "Take me on a calm sunset ride from UPB Regie to Carol Park. "
         "Avoid direct sun glare, rough cobblestone, and stop for water and specialty coffee at Origo."
@@ -347,18 +355,9 @@ if __name__ == "__main__":
         wind_direction_deg=270,
         time_of_day="sunset",
     )
+    print("\n[Rezultat VibePlan]:")
     print(plan_ab.model_dump_json(indent=2))
 
-    # Test 2: Loop Mode (35-minute circular scenic ride)
-    prompt_loop = (
-        "I have 35 minutes for a relaxed circular ride starting from Cotroceni, "
-        "sticking to quiet shaded streets and Cismigiu."
-    )
-    print(f"\n[Test 2 - Loop Mode] Prompt: {prompt_loop}")
-    plan_loop = agent.generate_plan(
-        user_prompt=prompt_loop,
-        city="Bucharest",
-        wind_direction_deg=90,
-        time_of_day="late_afternoon",
-    )
-    print(plan_loop.model_dump_json(indent=2))
+    print("\n[Test conversie coordonate GeoJSON pentru Dev 2]:")
+    coords = plan_ab.to_geojson_coordinates()
+    print(f"Puncte generate [lon, lat]: {coords}")

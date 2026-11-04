@@ -1,27 +1,49 @@
 import os
+from contextlib import asynccontextmanager
+
 from dotenv import load_dotenv
-from openai import OpenAI
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend.core import database
+from backend.routes.community_routes import router as community_router
+from backend.routes.routing_routes import router as routing_router
 
 load_dotenv()
 
-api_key = os.getenv("BASETEN_API_KEY")
-if not api_key:
-    raise ValueError("Lipseste BASETEN_API_KEY din fisierul .env!")
 
-client = OpenAI(
-    base_url="https://inference.baseten.co/v1",
-    api_key=api_key,
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Creează tabelele SQLite și curăță hazardurile expirate la startup
+    database.init_db()
+    yield
+
+
+app = FastAPI(
+    title="VibeRide API",
+    description="Mindful micro-mobility navigation copilot powered by Meta AI & Baseten",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-print("Trimit cererea către Baseten...")
-
-response = client.chat.completions.create(
-    model="meta-models/muse-spark-open-1026",
-    messages=[
-        {"role": "system", "content": "Raspunde scurt si concis în limba romana."},
-        {"role": "user", "content": "Salut! Confirma te rog ca esti activ si pregatit pentru hackathon."}
-    ],
+# Permite apelurile din aplicația mobilă (Expo React Native de pe telefon/simulator)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-print("\n--- Raspuns de la model ---")
-print(response.choices[0].message.content)
+# Conectează rutele comunitare, auditul vizual, raportarea cursei și rutarea AI
+app.include_router(community_router)
+app.include_router(routing_router)
+
+
+@app.get("/")
+def health_check():
+    return {
+        "status": "online",
+        "app": "VibeRide API",
+        "model": "meta-models/muse-spark-open-1026 on Baseten",
+    }
