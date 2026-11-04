@@ -9,7 +9,7 @@ from typing import List, Tuple, Dict, Any
 
 ORS_API_KEY = os.getenv("OPENROUTESERVICE_API_KEY", "")
 
-def format_as_geojson(coordinates: List[List[float]], distance_km: float, duration_min: float) -> Dict[str, Any]:
+def format_as_geojson(coordinates: List[List[float]], distance_km: float, duration_min: float, decibels_avoided_est_db: int = 25) -> Dict[str, Any]:
     """
     Wraps coordinates and route statistics into the standard GeoJSON format.
     """
@@ -24,7 +24,8 @@ def format_as_geojson(coordinates: List[List[float]], distance_km: float, durati
                 },
                 "properties": {
                     "distance_km": distance_km,
-                    "duration_min": duration_min
+                    "duration_min": duration_min,
+                    "decibels_avoided_est_db": decibels_avoided_est_db
                 }
             }
         ]
@@ -117,7 +118,7 @@ if __name__ == "__main__":
         
         print("✅ GeoJSON structure created successfully!")
         print(f"📦 GeoJSON Type: {geojson_result['type']}")
-        print(f"📏 Distance: {props['distance_km']} km | ⏱️ Time: {props['duration_min']} min")
+        print(f"📏 Distance: {props['distance_km']} km | ⏱️ Time: {props['duration_min']} min | 🔇 Noise avoided: {props.get('decibels_avoided_est_db')} dB")
         print(f"📍 Points [lon, lat] in line: {len(geom['coordinates'])} points")
 
     asyncio.run(test_run())

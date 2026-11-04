@@ -49,6 +49,7 @@ FALLBACK_PRESETS: Dict[str, Dict[str, Any]] = {
         ],
         "vibe_title": "Green Canopy & Lake Tour",
         "audio_intro": "Navigating calm shaded corridors towards Herăstrău.",
+        "decibels_avoided_est_db": 26, # 78 dB bulevard - 52 dB parcuri
     },
     "historic_chill": {
         "origin": BUCHAREST_LANDMARKS["regie"],
@@ -58,6 +59,7 @@ FALLBACK_PRESETS: Dict[str, Dict[str, Any]] = {
         ],
         "vibe_title": "Historic Villas & Low-Traffic Alleys",
         "audio_intro": "Rolling through quiet Cotroceni streets away from traffic.",
+        "decibels_avoided_est_db": 25, # 78 dB bulevard - 53 dB Cotroceni
     },
     "pitstop": {
         "origin": BUCHAREST_LANDMARKS["regie"],
@@ -67,6 +69,7 @@ FALLBACK_PRESETS: Dict[str, Dict[str, Any]] = {
         ],
         "vibe_title": "Cortado Commuter Special",
         "audio_intro": "Direct low-stress route with a curated specialty coffee stop.",
+        "decibels_avoided_est_db": 22, # 78 dB bulevard - 56 dB străzi secundare
     }
 }
 
@@ -107,6 +110,10 @@ class PlanDetails(BaseModel):
     intermediate_stops: List[StopItem] = Field(default_factory=list)
     vibe_title: str
     audio_intro: str
+    decibels_avoided_est_db: int = Field(
+        default=25,
+        description="Acoustic differential vs heavy traffic boulevards (dB)"
+    )
 
 
 class RoutePlanResponse(BaseModel):
@@ -162,6 +169,7 @@ def _fallback_plan(request: RoutePlanRequest) -> Dict[str, Any]:
         "intermediate_stops": intermediate_stops,
         "vibe_title": preset["vibe_title"],
         "audio_intro": preset["audio_intro"],
+        "decibels_avoided_est_db": preset.get("decibels_avoided_est_db", 25),
         "avoid_tags": ["highways", "heavy_traffic"]
     }
 
@@ -226,6 +234,7 @@ async def plan_route(request: RoutePlanRequest) -> RoutePlanResponse:
     4. Packages plan metadata and audio cues for the mobile app.
     """
     agent_output = await _call_vibe_agent(request)
+    avoided_db = int(agent_output.get("decibels_avoided_est_db", 25))
 
     try:
         plan_details = PlanDetails(
@@ -233,7 +242,8 @@ async def plan_route(request: RoutePlanRequest) -> RoutePlanResponse:
             destination=Waypoint(**agent_output["destination"]),
             intermediate_stops=[StopItem(**stop) for stop in agent_output.get("intermediate_stops", [])],
             vibe_title=str(agent_output.get("vibe_title") or "Calm Urban Ride"),
-            audio_intro=str(agent_output.get("audio_intro") or "Route calculated. Ride mindfully.")
+            audio_intro=str(agent_output.get("audio_intro") or "Route calculated. Ride mindfully."),
+            decibels_avoided_est_db=avoided_db,
         )
     except Exception as exc:
         logger.error("Plan validation error: %s", exc)
@@ -263,8 +273,10 @@ async def plan_route(request: RoutePlanRequest) -> RoutePlanResponse:
             detail=f"Route calculation pipeline failed: {str(exc)}"
         )
 
-    return RoutePlanResponse(plan=plan_details, geojson=geojson)
+    if geojson.get("features") and len(geojson["features"]) > 0:
+        geojson["features"][0]["properties"]["decibels_avoided_est_db"] = avoided_db
 
+    return RoutePlanResponse(plan=plan_details, geojson=geojson)
 
 @router.post(
     "/calculate",
