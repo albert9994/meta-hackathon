@@ -1,14 +1,20 @@
 import logging
 from typing import Any, Dict, Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.agents.vibe_planner import VibePlannerAgent
+from backend.agents.voice_copilot import VoiceCopilotAgent, VoiceCopilotResponse
 from backend.core.routing import calculate_bike_route
 
 logger = logging.getLogger("viberide.routing_routes")
 router = APIRouter(prefix="/api/route", tags=["routing"])
 
+
+# ============================================================================
+# 1. ROUTE PLANNING CONTRACTS & ENDPOINT
+# ============================================================================
 
 class RouteRequest(BaseModel):
     user_prompt: str = Field(
@@ -61,3 +67,37 @@ async def plan_and_calculate_route(req: RouteRequest) -> Dict[str, Any]:
     except Exception as exc:
         logger.error("Error in /api/route/plan: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ============================================================================
+# 2. VOICE COPILOT CONTRACTS & ENDPOINT
+# ============================================================================
+
+class CopilotVoiceRequest(BaseModel):
+    user_utterance: str = Field(
+        ...,
+        description="Transcript of what the rider said hands-free",
+        example="There's intense headwind and heavy traffic here, find me a quiet alley.",
+    )
+    current_street: Optional[str] = Field(
+        default="moving on route",
+        description="Current street name or contextual location",
+    )
+
+
+@router.post("/copilot", response_model=VoiceCopilotResponse)
+async def copilot_voice_endpoint(req: CopilotVoiceRequest) -> VoiceCopilotResponse:
+    """
+    Interpreteaza comanda vocala a riderului in timp real, clasifica intentia
+    si genereaza raspunsul audio zen si actiunea de rerutare/hazard prin Meta Muse Spark.
+    """
+    try:
+        agent = VoiceCopilotAgent()
+        result = agent.process_voice_input(
+            user_utterance=req.user_utterance,
+            current_street=req.current_street,
+        )
+        return result
+    except Exception as exc:
+        logger.error("Error in /api/route/copilot: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))    
