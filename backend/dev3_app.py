@@ -87,3 +87,9 @@ async def vision_audit_with_demo_fallback(request: Request):
 
 
 app.include_router(community_router)
+try:
+    from backend.routes.navigation_routes import router as navigation_router
+    app.include_router(navigation_router)
+    logger.info("Navigation routes loaded successfully.")
+except Exception as exc:
+    logger.warning("Could not load navigation routes: %s", exc)
