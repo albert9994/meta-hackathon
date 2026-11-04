@@ -11,6 +11,16 @@ import MapView, { Marker, Polyline, Callout } from 'react-native-maps';
  * 3. Dynamic markers for origin, destination, vibe stops (coffee, park, view), and hazards.
  * 4. Automatic bounding box refit on route change.
  */
+
+const isValidCoord = (p) =>
+  p &&
+  Number.isFinite(p.latitude) &&
+  Number.isFinite(p.longitude) &&
+  Math.abs(p.latitude) <= 90 &&
+  Math.abs(p.longitude) <= 180;
+
+const hasLatLon = (p) => p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon));
+
 export default function VibeMapView({
   plan,
   geojson,
@@ -34,21 +44,28 @@ export default function VibeMapView({
     else if (geojson.routes && geojson.routes.length > 0) {
       coords = geojson.routes[0]?.geometry?.coordinates || [];
     }
-    // Cazul C: Obiect direct Geometry (LineString)
+    // Cazul C: Feature singular
+    else if (geojson.type === 'Feature') {
+      coords = geojson.geometry?.coordinates || [];
+    }
+    // Cazul D: Obiect direct Geometry (LineString)
     else if (geojson.coordinates && Array.isArray(geojson.coordinates)) {
       coords = geojson.coordinates;
     }
-    // Cazul D: Array direct de perechi [lon, lat]
+    // Cazul E: Array direct de perechi [lon, lat]
     else if (Array.isArray(geojson)) {
       coords = geojson;
     }
 
     if (!Array.isArray(coords)) return [];
 
-    return coords.map((coord) => ({
-      latitude: Array.isArray(coord) ? coord[1] : coord.latitude,
-      longitude: Array.isArray(coord) ? coord[0] : coord.longitude,
-    }));
+    return coords
+      .map((c) =>
+        Array.isArray(c)
+          ? { latitude: Number(c[1]), longitude: Number(c[0]) }
+          : { latitude: Number(c?.latitude), longitude: Number(c?.longitude) }
+      )
+      .filter(isValidCoord);
   }, [geojson]);
 
   // 2. Automatically fit map bounds whenever a new route is loaded
@@ -75,14 +92,20 @@ export default function VibeMapView({
         return '☕';
       case 'park':
         return '🌿';
+      case 'viewpoint':
       case 'view':
         return '🏛️';
+      case 'fountain':
+        return '⛲';
       case 'gelato':
         return '🍦';
       default:
         return '✨';
     }
   };
+
+  const stops = (plan?.intermediate_stops || []).filter(hasLatLon);
+  const validHazards = (Array.isArray(hazards) ? hazards : []).filter(hasLatLon);
 
   return (
     <View style={[styles.container, style]}>
@@ -96,9 +119,9 @@ export default function VibeMapView({
         showsCompass={true}
       >
         {/* ================================================================= */}
-        {/* GLOW AESTHETIC ROUTE POLYLINES                             */}
+        {/* GLOW AESTHETIC ROUTE POLYLINES                                    */}
         {/* ================================================================= */}
-        {routeCoordinates.length > 0 && (
+        {routeCoordinates.length > 1 && (
           <>
             {/* Glow Layer: 10px #fc5200 at 0.35 opacity */}
             <Polyline
@@ -125,11 +148,11 @@ export default function VibeMapView({
         {/* ================================================================= */}
         {/* ROUTE MARKERS: Origin & Destination                               */}
         {/* ================================================================= */}
-        {plan?.origin && (
+        {hasLatLon(plan?.origin) && (
           <Marker
             coordinate={{
-              latitude: plan.origin.lat,
-              longitude: plan.origin.lon,
+              latitude: Number(plan.origin.lat),
+              longitude: Number(plan.origin.lon),
             }}
             title={plan.origin.name}
             description="Start of calm ride"
@@ -141,11 +164,11 @@ export default function VibeMapView({
           </Marker>
         )}
 
-        {plan?.destination && (
+        {hasLatLon(plan?.destination) && (
           <Marker
             coordinate={{
-              latitude: plan.destination.lat,
-              longitude: plan.destination.lon,
+              latitude: Number(plan.destination.lat),
+              longitude: Number(plan.destination.lon),
             }}
             title={plan.destination.name}
             description="Destination"
@@ -158,14 +181,14 @@ export default function VibeMapView({
         )}
 
         {/* ================================================================= */}
-        {/* INTERMEDIATE VIBE STOPS (Coffee, Parks, Gelato)                   */}
+        {/* INTERMEDIATE VIBE STOPS (Coffee, Parks, Fountains, Viewpoints)    */}
         {/* ================================================================= */}
-        {plan?.intermediate_stops?.map((stop, index) => (
+        {stops.map((stop, index) => (
           <Marker
             key={`stop-${index}-${stop.lat}-${stop.lon}`}
             coordinate={{
-              latitude: stop.lat,
-              longitude: stop.lon,
+              latitude: Number(stop.lat),
+              longitude: Number(stop.lon),
             }}
             title={stop.name}
             description={`Vibe Stop: ${stop.type || 'Scenic point'}`}
@@ -186,14 +209,14 @@ export default function VibeMapView({
         ))}
 
         {/* ================================================================= */}
-        {/* HAZARD WARNING MARKERS (From Spatial Safety Sensor)              */}
+        {/* HAZARD WARNING MARKERS (From Spatial Safety Sensor)               */}
         {/* ================================================================= */}
-        {hazards.map((hazard) => (
+        {validHazards.map((hazard, index) => (
           <Marker
-            key={`hazard-${hazard.id}`}
+            key={`hazard-${hazard.id ?? index}`}
             coordinate={{
-              latitude: hazard.lat,
-              longitude: hazard.lon,
+              latitude: Number(hazard.lat),
+              longitude: Number(hazard.lon),
             }}
             zIndex={5}
           >

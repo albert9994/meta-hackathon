@@ -8,6 +8,7 @@ import {
   StatusBar,
   Modal,
   Platform,
+  Alert,
 } from 'react-native';
 
 import VibeMapView from './components/MapView';
@@ -15,9 +16,7 @@ import SearchHUD from './components/SearchHUD';
 import VisionAuditModal from './components/VisionAuditModal';
 import EndRideModal from './components/EndRideModal';
 import Leaderboard from './components/Leaderboard';
-import { planRoute } from './utils/api';
-
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://192.168.1.152:8000';
+import { planRoute, API_BASE_URL } from './utils/api';
 
 export default function App() {
   // Stări pentru navigare și traseu
@@ -51,10 +50,11 @@ export default function App() {
   // Încarcă pericolele raportate din backend SQLite la pornire
   const fetchHazards = useCallback(async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/hazards`);
+      const res = await fetch(`${API_BASE_URL}/api/hazards`);
       if (res.ok) {
         const data = await res.json();
-        setHazards(data);
+        const list = Array.isArray(data) ? data : data?.hazards;
+        setHazards(Array.isArray(list) ? list : []);
       }
     } catch (err) {
       console.log("Could not fetch hazards:", err.message);
@@ -67,24 +67,26 @@ export default function App() {
 
   // Planificare rută prin SearchHUD către backend-ul AI
   const handleRouteSearch = async (searchData) => {
+    const userPrompt = (
+      typeof searchData === 'string'
+        ? searchData
+        : searchData?.user_prompt || searchData?.prompt || ''
+    ).trim();
+    if (!userPrompt) return;
+
     setIsLoadingRoute(true);
     try {
-      const promptText = searchData?.user_prompt || searchData?.prompt || searchData;
-      const vibePreset = searchData?.vibe_preset || 'green_shady';
-
       const res = await planRoute({
-        prompt: promptText,
-        vibe_preset: vibePreset,
+        user_prompt: userPrompt,
+        vibe_preset: searchData?.vibe_preset || 'green_shady',
+        city: searchData?.city,
       });
-
-      if (res) {
-        // Extrage planul (origin, destination, stops)
-        setCurrentPlan(res.plan || res);
-        // Extrage geometria traseului pentru hartă
-        setRouteGeojson(res.geojson || res.route_geojson || res.geometry || res);
-      }
+      // planRoute (api.js) garantează geojson valid și aruncă ApiError altfel
+      setCurrentPlan(res.vibe_plan);
+      setRouteGeojson(res.geojson);
     } catch (error) {
-      console.log("Error planning route:", error);
+      console.log('Error planning route:', error);
+      Alert.alert('Route planning failed', error?.message || 'Unknown error');
     } finally {
       setIsLoadingRoute(false);
     }
@@ -109,7 +111,10 @@ export default function App() {
         <View style={styles.searchWrapper}>
           <SearchHUD
             onSearchSubmit={handleRouteSearch}
-            onPlanSelected={setCurrentPlan}
+            onPlanSelected={(p) => {
+              setCurrentPlan(p);
+              setRouteGeojson(null); // evită polyline vechi cu markeri noi
+            }}
             isLoading={isLoadingRoute}
           />
         </View>

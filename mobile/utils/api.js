@@ -7,6 +7,7 @@
  *     EXPO_PUBLIC_API_URL=http://192.168.X.X:8000
  *
  * and start the backend with:  uvicorn backend.main:app --host 0.0.0.0 --port 8000
+ * Restart Expo with `npx expo start -c` after changing .env.
  */
 
 const FALLBACK_URL = 'http://192.168.0.100:8000';
@@ -48,7 +49,10 @@ export async function apiRequest(path, { method = 'GET', body, timeoutMs = 15000
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
       method,
-      headers: body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' },
+      headers:
+        body !== undefined
+          ? { 'Content-Type': 'application/json', Accept: 'application/json' }
+          : { Accept: 'application/json' },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
@@ -81,10 +85,25 @@ export async function apiRequest(path, { method = 'GET', body, timeoutMs = 15000
   }
 }
 
-// ---- Typed helpers (paths and keys follow the blueprint's Section 4) ---------
+// ---- Typed helpers -----------------------------------------------------------
 
-export const planRoute = ({ user_prompt, vibe_preset, city }) =>
-  apiRequest('/api/routes/plan', { method: 'POST', body: { user_prompt, vibe_preset, city }, timeoutMs: 45000 });
+/**
+ * POST /api/route/plan  ->  { geojson: FeatureCollection([lon,lat]), vibe_plan: {origin, destination, ...} }
+ * Validates the geometry so the map never receives an empty / malformed route.
+ */
+export const planRoute = async ({ user_prompt, vibe_preset, city }) => {
+  const body = { user_prompt };
+  if (vibe_preset) body.vibe_preset = vibe_preset;
+  if (city) body.city = city;
+
+  const data = await apiRequest('/api/route/plan', { method: 'POST', body, timeoutMs: 60000 });
+
+  const coords = data?.geojson?.features?.[0]?.geometry?.coordinates;
+  if (!Array.isArray(coords) || coords.length < 2) {
+    throw new ApiError('The server returned an invalid route. Please try again.', { kind: 'http' });
+  }
+  return data;
+};
 
 export const auditStreet = ({ image_base64, lat, lon }) => {
   const body = { image_base64 };
@@ -106,8 +125,11 @@ export const getFeed = ({ crew, limit = 20, beforeId } = {}) => {
   return apiRequest(`/api/feed?${params.toString()}`);
 };
 
-export const getLeaderboard = ({ scope = 'weekly', crew }) =>
-  apiRequest(`/api/leaderboard?${new URLSearchParams({ scope, crew }).toString()}`);
+export const getLeaderboard = ({ scope = 'weekly', crew } = {}) => {
+  const params = new URLSearchParams({ scope });
+  if (crew) params.set('crew', crew);
+  return apiRequest(`/api/leaderboard?${params.toString()}`);
+};
 
 export const getHazards = (bbox = {}) => {
   const params = new URLSearchParams();
