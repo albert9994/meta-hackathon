@@ -22,17 +22,32 @@ export default function VibeMapView({
 
   // 1. Transform GeoJSON [lon, lat] coordinates into { latitude, longitude }
   const routeCoordinates = useMemo(() => {
-    if (!geojson || !geojson.features || geojson.features.length === 0) {
-      return [];
+    if (!geojson) return [];
+
+    let coords = [];
+
+    // Cazul A: FeatureCollection (GeoJSON standard)
+    if (geojson.features && geojson.features.length > 0) {
+      coords = geojson.features[0]?.geometry?.coordinates || [];
     }
-    const feature = geojson.features[0];
-    if (!feature.geometry || !Array.isArray(feature.geometry.coordinates)) {
-      return [];
+    // Cazul B: Rute OSRM / OpenStreetMap
+    else if (geojson.routes && geojson.routes.length > 0) {
+      coords = geojson.routes[0]?.geometry?.coordinates || [];
+    }
+    // Cazul C: Obiect direct Geometry (LineString)
+    else if (geojson.coordinates && Array.isArray(geojson.coordinates)) {
+      coords = geojson.coordinates;
+    }
+    // Cazul D: Array direct de perechi [lon, lat]
+    else if (Array.isArray(geojson)) {
+      coords = geojson;
     }
 
-    return feature.geometry.coordinates.map((coord) => ({
-      latitude: coord[1],
-      longitude: coord[0],
+    if (!Array.isArray(coords)) return [];
+
+    return coords.map((coord) => ({
+      latitude: Array.isArray(coord) ? coord[1] : coord.latitude,
+      longitude: Array.isArray(coord) ? coord[0] : coord.longitude,
     }));
   }, [geojson]);
 
@@ -73,11 +88,12 @@ export default function VibeMapView({
     <View style={[styles.container, style]}>
       <MapView
         ref={mapRef}
-        style={StyleSheet.absoluteFillObject}
+        style={styles.map}
         initialRegion={initialRegion}
+        userInterfaceStyle="dark"
         showsUserLocation={Boolean(userLocation)}
         showsMyLocationButton={false}
-        showsCompass={false}
+        showsCompass={true}
       >
         {/* ================================================================= */}
         {/* GLOW AESTHETIC ROUTE POLYLINES                             */}
@@ -206,8 +222,11 @@ export default function VibeMapView({
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    backgroundColor: '#121212',
+    ...StyleSheet.absoluteFillObject,
+  },
+  map: {
+    width: '100%',
+    height: '100%',
   },
   markerBadge: {
     width: 36,
