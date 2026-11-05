@@ -65,7 +65,16 @@ export default function App() {
     fetchHazards();
   }, [fetchHazards]);
 
-  // Planificare rută prin SearchHUD către backend-ul AI
+  // Callback declanșat automat când SearchHUD primește traseul de la backend
+  const handleRoutePlanned = (data) => {
+    console.log("[VibeRide] Route payload received:", data);
+    const plan = data?.plan || data?.vibe_plan || null;
+    const geojson = data?.geojson || (data?.type === 'FeatureCollection' ? data : null);
+    setCurrentPlan(plan);
+    setRouteGeojson(geojson);
+  };
+
+  // Fallback direct dacă se declanșează căutare manuală
   const handleRouteSearch = async (searchData) => {
     const userPrompt = (
       typeof searchData === 'string'
@@ -79,11 +88,9 @@ export default function App() {
       const res = await planRoute({
         user_prompt: userPrompt,
         vibe_preset: searchData?.vibe_preset || 'green_shady',
-        city: searchData?.city,
+        city: searchData?.city || 'Bucharest',
       });
-      // planRoute (api.js) garantează geojson valid și aruncă ApiError altfel
-      setCurrentPlan(res.vibe_plan);
-      setRouteGeojson(res.geojson);
+      handleRoutePlanned(res);
     } catch (error) {
       console.log('Error planning route:', error);
       Alert.alert('Route planning failed', error?.message || 'Unknown error');
@@ -110,10 +117,12 @@ export default function App() {
       <SafeAreaView style={styles.topSafeArea} pointerEvents="box-none">
         <View style={styles.searchWrapper}>
           <SearchHUD
+            city="Bucharest"
+            onRoutePlanned={handleRoutePlanned}
             onSearchSubmit={handleRouteSearch}
             onPlanSelected={(p) => {
               setCurrentPlan(p);
-              setRouteGeojson(null); // evită polyline vechi cu markeri noi
+              setRouteGeojson(null);
             }}
             isLoading={isLoadingRoute}
           />

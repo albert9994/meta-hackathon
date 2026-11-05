@@ -14,7 +14,6 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Creează tabelele SQLite și curăță hazardurile expirate la startup
     database.init_db()
     yield
 
@@ -26,7 +25,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Permite apelurile din aplicația mobilă (Expo React Native de pe telefon/simulator)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,9 +33,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Conectează rutele comunitare, auditul vizual, raportarea cursei și rutarea AI
+# Rutele comunitare (audit, finish, leaderboard, feed, hazards)
 app.include_router(community_router)
-app.include_router(routing_router)
+
+# Rutele de navigatie (SearchHUD trimite la /api/routes, altele la /api/route)
+app.include_router(routing_router, prefix="/api/routes")
+app.include_router(routing_router, prefix="/api/route")
 
 
 @app.get("/")
