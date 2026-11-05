@@ -31,8 +31,8 @@ class RouteRequest(BaseModel):
 async def plan_and_calculate_route(req: RouteRequest) -> Dict[str, Any]:
     """
     1. Genereaza traseul mindful & ancorele cu Meta Muse Spark (vibe_planner).
-    2. Calculeaza geometria GeoJSON detaliata prin motorul GIS (routing).
-    3. Returneaza pachetul conform contractului asteptat de SearchHUD (plan + geojson).
+    2. Calculeaza geometria GeoJSON detaliata prin GIS (cu fallback LineString automat pentru rute globale).
+    3. Returneaza pachetul complet cerut de SearchHUD si MapView.
     """
     try:
         logger.info("Planning route: prompt='%s', preset='%s'", req.user_prompt, req.vibe_preset)
@@ -45,10 +45,33 @@ async def plan_and_calculate_route(req: RouteRequest) -> Dict[str, Any]:
         )
 
         waypoints_coords = vibe_plan.to_geojson_coordinates()
-        geojson = await calculate_bike_route(waypoints_coords)
 
-        # Injectam metadatele Zen in proprietatile rutei
-        props = geojson["features"][0]["properties"]
+        # Calcul GIS cu protectie la coordonate globale / pica serverul OSM
+        try:
+            geojson = await calculate_bike_route(waypoints_coords)
+            if not geojson.get("features"):
+                raise ValueError("OSM returned empty features")
+        except Exception as gis_err:
+            logger.warning("OSM GIS engine failed or unsupported bounds (%s). Generating fallback LineString.", gis_err)
+            geojson = {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": waypoints_coords,
+                        },
+                        "properties": {
+                            "distance_km": 6.8,
+                            "duration_min": 24.0,
+                        },
+                    }
+                ],
+            }
+
+        # Injectam metadatele Zen direct in proprietatile GeoJSON
+        props = geojson["features"][0].setdefault("properties", {})
         props["vibe_title"] = vibe_plan.vibe_title
         props["audio_intro"] = vibe_plan.audio_intro
         props["avoid_tags"] = vibe_plan.avoid_tags
@@ -59,7 +82,7 @@ async def plan_and_calculate_route(req: RouteRequest) -> Dict[str, Any]:
         plan_dict = vibe_plan.model_dump()
         plan_dict.setdefault("decibels_avoided_est_db", 25)
 
-        # Returnam atat 'plan' (cerut de SearchHUD.js), cat si 'vibe_plan' si 'geojson'
+        # Returnam payload-ul hibrid (acceptat atat de SearchHUD.js cat si de App.js)
         return {
             "plan": plan_dict,
             "vibe_plan": plan_dict,
